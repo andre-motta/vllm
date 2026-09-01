@@ -5,8 +5,12 @@ import pytest
 import torch
 
 from vllm.utils.extensible_tensor import ExtensibleTensor
+from vllm.utils.vmm_driver import vmm_unavailable_reason
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+pytestmark = pytest.mark.skipif(
+    not torch.cuda.is_available() or vmm_unavailable_reason() is not None,
+    reason="requires a CUDA/ROCm driver with usable VMM",
+)
 
 
 def test_extensible_tensor_grows_without_moving() -> None:
@@ -135,3 +139,29 @@ def test_invalid_usage_raises() -> None:
             et.resize_per_segment_(et.segment_capacity_bytes + 1)
     finally:
         et.free()
+
+
+def test_release_physical_keeps_addresses() -> None:
+    """Releasing physical pages keeps the reservation; recommitting maps fresh
+    zeroed pages under the same addresses (the sleep/wake contract)."""
+    et = ExtensibleTensor(max_num_bytes=8192, device="cuda", num_segments=2)
+    try:
+        et.resize_per_segment_(1024, zero_new=True)
+        fv = et.full_view()
+        fv[:1024].fill_(9)
+        base = et.base_ptr
+
+        et.release_physical()
+        assert et.num_bytes == 0
+        assert et.physical_bytes == 0
+        assert et.base_ptr == base
+
+        et.resize_per_segment_(1024, zero_new=True)
+        assert et.full_view().data_ptr() == base
+        assert torch.count_nonzero(et.full_view()[:1024]) == 0
+    finally:
+        et.free()
+
+
+def test_vmm_probe_reports_usable_driver() -> None:
+    assert vmm_unavailable_reason() is None

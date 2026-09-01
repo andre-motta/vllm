@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from vllm.config import ModelConfig, VllmConfig
+from vllm.utils.vmm_driver import vmm_unavailable_reason
 from vllm.v1.core.kv_cache_utils import get_kv_cache_config_from_groups
 from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheGroupSpec
 from vllm.v1.kv_cache_layout import KVCacheLayout
@@ -13,6 +14,11 @@ from vllm.v1.worker.extensible_kv_cache import (
     measure_kv_cache_blocks,
 )
 from vllm.v1.worker.utils import allocate_kv_cache
+
+requires_vmm = pytest.mark.skipif(
+    not torch.cuda.is_available() or vmm_unavailable_reason() is not None,
+    reason="requires a CUDA/ROCm driver with usable VMM",
+)
 
 NUM_BLOCKS = 8
 NUM_LAYERS = 3
@@ -34,7 +40,7 @@ def _make_config(layout: KVCacheLayout):
     return config, spec
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+@requires_vmm
 @pytest.mark.parametrize(
     ("layout", "expected_segments"),
     [(KVCacheLayout.LBNHC, NUM_LAYERS), (KVCacheLayout.BLNHC, 1)],
@@ -52,7 +58,7 @@ def test_segments_follow_layout(layout, expected_segments):
         kv_cache.free()
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+@requires_vmm
 @pytest.mark.parametrize("layout", [KVCacheLayout.LBNHC, KVCacheLayout.BLNHC])
 def test_views_stay_valid_across_commits(layout):
     """Layer views built over the reservation address committed blocks at
